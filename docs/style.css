@@ -84,3 +84,65 @@ ul.points li button.delete { background: transparent; color: #999; padding: 4px 
   font-size: 13px;
   z-index: 3000;
 }
+
+/* ---------- category tabs (user page) ---------- */
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+button.tab-btn {
+  background: #f0f0f0;
+  border: 1px solid #ddd;
+  border-radius: 16px;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+button.tab-btn.active { background: #1565C0; color: #fff; border-color: #1565C0; }
+
+/* ---------- admin page ---------- */
+.admin-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1001;
+  background: #E53935;
+  color: #fff;
+  font-size: 11px;
+  font-weight: bold;
+  padding: 4px 10px;
+  border-radius: 12px;
+}
+.category-chip {
+  background: #eef;
+  color: #1565C0;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+button.secondary-btn { background: #eee; color: #333; flex: 1; }
+#bottomPanel .row button { flex: 1; }
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4000;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.overlay-box {
+  background: #fff;
+  border-radius: 10px;
+  padding: 16px;
+  width: 100%;
+  max-width: 480px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+#exportText {
+  width: 100%;
+  height: 200px;
+  font-family: monospace;
+  font-size: 12px;
+  margin: 8px 0;
+}

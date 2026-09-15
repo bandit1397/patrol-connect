@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-<title>순찰 커넥트 (웹 테스트)</title>
+<title>순찰 커넥트</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <link rel="stylesheet" href="style.css" />
 </head>
@@ -11,23 +11,20 @@
 
 <div id="map"></div>
 
-<div id="searchPanel" class="panel">
-  <div class="row">
-    <input id="addressInput" type="text" placeholder="주소를 입력하세요" />
-    <button id="searchBtn">검색</button>
-    <button id="tapModeBtn" class="toggle">지도 탭으로 추가</button>
-  </div>
-  <ul id="searchResults" class="results hidden"></ul>
+<div id="tabsPanel" class="panel">
+  <strong style="font-size:13px;">순찰할 종류 선택 (여러 개 선택 가능)</strong>
+  <div id="categoryTabs" class="tabs"></div>
+  <p id="noCategories" class="muted hidden">등록된 지점이 없습니다. 관리자에게 문의하세요.</p>
 </div>
 
 <div id="bottomPanel" class="panel bottom">
   <div class="row space-between">
-    <strong>등록된 순찰 지점</strong>
+    <strong>선택된 순찰 지점</strong>
     <span id="pointCount"></span>
   </div>
   <ul id="pointsList" class="points"></ul>
-  <p id="noPoints" class="muted hidden">등록된 지점이 없습니다. 주소를 검색하거나 지도를 눌러 추가하세요.</p>
-  <button id="startBtn" class="primary">순찰 시작</button>
+  <p id="noPoints" class="muted hidden">위에서 순찰할 종류를 먼저 선택하세요.</p>
+  <button id="startBtn" class="primary" disabled>순찰 시작</button>
   <button id="stopBtn" class="secondary hidden">순찰 종료</button>
 </div>
 
@@ -39,6 +36,7 @@
 <div id="toast" class="toast hidden"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="common.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

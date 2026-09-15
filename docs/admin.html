@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>순찰 커넥트 — 관리자 (지점 편집)</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="adminBadge" class="admin-badge">관리자 모드</div>
+
+<div id="searchPanel" class="panel">
+  <div class="row">
+    <input id="addressInput" type="text" placeholder="주소를 입력하세요" />
+    <button id="searchBtn">검색</button>
+    <button id="tapModeBtn" class="toggle">지도 탭으로 추가</button>
+  </div>
+  <ul id="searchResults" class="results hidden"></ul>
+</div>
+
+<div id="bottomPanel" class="panel bottom">
+  <div class="row space-between">
+    <strong>등록된 지점 (초안)</strong>
+    <span id="pointCount"></span>
+  </div>
+  <ul id="pointsList" class="points"></ul>
+  <p id="noPoints" class="muted hidden">등록된 지점이 없습니다. 주소를 검색하거나 지도를 눌러 추가하세요.</p>
+  <div class="row">
+    <button id="reloadBtn" class="secondary-btn">points.json 다시 불러오기</button>
+    <button id="exportBtn" class="primary">내보내기 (JSON)</button>
+  </div>
+</div>
+
+<div id="exportOverlay" class="overlay hidden">
+  <div class="overlay-box">
+    <p class="muted" style="text-align:left">
+      아래 내용을 복사(또는 다운로드)해서 저장소의 <code>docs/points.json</code> 파일 내용으로 바꾼 뒤
+      커밋 &amp; 푸시하면 모든 사용자에게 배포됩니다.
+    </p>
+    <textarea id="exportText" readonly></textarea>
+    <div class="row">
+      <button id="copyBtn">클립보드에 복사</button>
+      <a id="downloadLink" download="points.json"><button id="downloadBtn">파일로 다운로드</button></a>
+      <button id="closeExportBtn" class="secondary-btn">닫기</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="common.js"></script>
+<script src="admin.js"></script>
+</body>
+</html>

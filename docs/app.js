@@ -1,52 +1,26 @@
-// Patrol Connect — web prototype
-// Same core logic as the native Android app (nearest-unvisited-point auto sequencing,
-// Kakao Map hand-off), minus the OS-level automation a browser can't do:
-// every hop into Kakao Map needs one tap here, since browsers block scripts from
-// opening another app without a real user gesture.
+// Officer-facing patrol navigation. Points are read-only here — they come from
+// points.json, which only the admin (admin.html) edits and commits. This page just
+// lets the officer pick which categories to patrol today, then hands off to Kakao
+// Map for each nearest-unvisited stop.
 
-const STORAGE_KEY = 'patrol_points_v1';
 const ARRIVAL_RADIUS_METERS = 50;
-const KAKAO_PACKAGE = 'net.daum.android.map';
+const VISITED_KEY = 'patrol_visited_v1';
 
-let points = loadPoints();
-let tapModeOn = false;
+let allPoints = [];
+let selectedCategories = new Set();
+let visited = loadVisited();
 let patrolActive = false;
-let currentTarget = null; // point currently being navigated to
+let currentTarget = null;
 let watchId = null;
-let markers = {}; // id -> Leaflet marker
+let markers = {};
 
-// ---------- storage ----------
-function loadPoints() {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-  } catch (e) {
-    return [];
-  }
+// ---------- visited (local per-device progress, separate from the shared point list) ----------
+function loadVisited() {
+  try { return JSON.parse(localStorage.getItem(VISITED_KEY)) || {}; }
+  catch (e) { return {}; }
 }
-function savePoints() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(points));
-}
-
-// ---------- distance ----------
-function distanceMeters(lat1, lng1, lat2, lng2) {
-  const R = 6371000;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLng = (lng2 - lng1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function findNearestUnvisited(lat, lng) {
-  const unvisited = points.filter(p => !p.visited);
-  if (unvisited.length === 0) return null;
-  let best = unvisited[0];
-  let bestDist = distanceMeters(lat, lng, best.lat, best.lng);
-  for (const p of unvisited.slice(1)) {
-    const d = distanceMeters(lat, lng, p.lat, p.lng);
-    if (d < bestDist) { best = p; bestDist = d; }
-  }
-  return best;
+function saveVisited() {
+  localStorage.setItem(VISITED_KEY, JSON.stringify(visited));
 }
 
 // ---------- map ----------
@@ -56,153 +30,82 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '&copy; OpenStreetMap contributors'
 }).addTo(map);
 
-map.on('click', (e) => {
-  if (!tapModeOn) return;
-  addPoint(`지점 (${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)})`, e.latlng.lat, e.latlng.lng);
-});
-
-function markerIcon(visited) {
+function markerIcon(isVisited) {
   return L.divIcon({
     className: '',
     html: `<div style="width:22px;height:22px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);
-      background:${visited ? '#2E7D32' : '#E53935'};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.4)"></div>`,
+      background:${isVisited ? '#2E7D32' : '#E53935'};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.4)"></div>`,
     iconSize: [22, 22],
     iconAnchor: [11, 22]
   });
 }
 
+function filteredPoints() {
+  return allPoints.filter(p => selectedCategories.has(p.category));
+}
+
 function syncMarkers() {
-  const currentIds = new Set(points.map(p => p.id));
+  const shown = filteredPoints();
+  const currentIds = new Set(shown.map(p => p.id));
   for (const id of Object.keys(markers)) {
     if (!currentIds.has(id)) { map.removeLayer(markers[id]); delete markers[id]; }
   }
-  for (const p of points) {
+  for (const p of shown) {
+    const isVisited = !!visited[p.id];
     if (!markers[p.id]) {
-      markers[p.id] = L.marker([p.lat, p.lng], { icon: markerIcon(p.visited) }).addTo(map);
+      markers[p.id] = L.marker([p.lat, p.lng], { icon: markerIcon(isVisited) }).addTo(map);
     } else {
-      markers[p.id].setLatLng([p.lat, p.lng]);
-      markers[p.id].setIcon(markerIcon(p.visited));
+      markers[p.id].setIcon(markerIcon(isVisited));
     }
     markers[p.id].bindPopup(p.label);
   }
 }
 
-// ---------- points list ----------
+// ---------- category tabs ----------
+function renderTabs() {
+  const wrap = document.getElementById('categoryTabs');
+  const noCategories = document.getElementById('noCategories');
+  const categories = [...new Set(allPoints.map(p => p.category))];
+  noCategories.classList.toggle('hidden', categories.length > 0);
+
+  wrap.innerHTML = '';
+  for (const cat of categories) {
+    const btn = document.createElement('button');
+    btn.textContent = cat;
+    btn.className = 'tab-btn' + (selectedCategories.has(cat) ? ' active' : '');
+    btn.addEventListener('click', () => {
+      if (selectedCategories.has(cat)) selectedCategories.delete(cat);
+      else selectedCategories.add(cat);
+      renderTabs();
+      renderPointsList();
+      syncMarkers();
+    });
+    wrap.appendChild(btn);
+  }
+}
+
+// ---------- points list (read-only) ----------
 function renderPointsList() {
   const list = document.getElementById('pointsList');
   const noPoints = document.getElementById('noPoints');
   const count = document.getElementById('pointCount');
-  list.innerHTML = '';
-  count.textContent = points.length ? `${points.filter(p => p.visited).length}/${points.length} 완료` : '';
-  noPoints.classList.toggle('hidden', points.length > 0);
+  const shown = filteredPoints();
 
-  for (const p of points) {
+  list.innerHTML = '';
+  const doneCount = shown.filter(p => visited[p.id]).length;
+  count.textContent = shown.length ? `${doneCount}/${shown.length} 완료` : '';
+  noPoints.classList.toggle('hidden', shown.length > 0);
+
+  for (const p of shown) {
     const li = document.createElement('li');
     li.innerHTML = `
-      <span class="dot ${p.visited ? 'done' : 'pending'}"></span>
+      <span class="dot ${visited[p.id] ? 'done' : 'pending'}"></span>
       <span class="label">${escapeHtml(p.label)}</span>
-      <button class="delete" data-id="${p.id}">삭제</button>
     `;
     list.appendChild(li);
   }
-  list.querySelectorAll('button.delete').forEach(btn => {
-    btn.addEventListener('click', () => {
-      points = points.filter(p => p.id !== btn.dataset.id);
-      savePoints();
-      renderAll();
-    });
-  });
-}
 
-function escapeHtml(s) {
-  const div = document.createElement('div');
-  div.textContent = s;
-  return div.innerHTML;
-}
-
-function renderAll() {
-  savePoints();
-  renderPointsList();
-  syncMarkers();
-}
-
-function makeId() {
-  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
-  return 'id-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-}
-
-function addPoint(label, lat, lng) {
-  points.push({ id: makeId(), label, lat, lng, visited: false });
-  renderAll();
-  showToast('지점이 추가되었습니다');
-}
-
-// ---------- search (Nominatim, free, no key) ----------
-async function searchAddress(query) {
-  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(query)}`;
-  const res = await fetch(url); // browsers can't set a custom User-Agent, but always send Referer,
-  if (!res.ok) return [];       // which is what Nominatim's usage policy asks apps to identify with
-  return res.json();
-}
-
-document.getElementById('searchBtn').addEventListener('click', doSearch);
-document.getElementById('addressInput').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') doSearch();
-});
-
-async function doSearch() {
-  const input = document.getElementById('addressInput');
-  const query = input.value.trim();
-  if (!query) return;
-  const resultsEl = document.getElementById('searchResults');
-  resultsEl.innerHTML = '<li>검색중...</li>';
-  resultsEl.classList.remove('hidden');
-
-  const results = await searchAddress(query);
-  resultsEl.innerHTML = '';
-  if (results.length === 0) {
-    resultsEl.innerHTML = '<li>검색 결과가 없습니다</li>';
-    return;
-  }
-  for (const r of results) {
-    const li = document.createElement('li');
-    li.textContent = r.display_name;
-    li.addEventListener('click', () => {
-      addPoint(r.display_name, parseFloat(r.lat), parseFloat(r.lon));
-      map.setView([r.lat, r.lon], 17);
-      resultsEl.classList.add('hidden');
-      input.value = '';
-    });
-    resultsEl.appendChild(li);
-  }
-}
-
-// ---------- tap mode ----------
-const tapModeBtn = document.getElementById('tapModeBtn');
-tapModeBtn.addEventListener('click', () => {
-  tapModeOn = !tapModeOn;
-  tapModeBtn.classList.toggle('active', tapModeOn);
-});
-
-// ---------- kakao hand-off ----------
-function launchKakao(point) {
-  const uri = `kakaomap://route?ep=${point.lat},${point.lng}&by=CAR`;
-  const fallbackUrl = `https://play.google.com/store/apps/details?id=${KAKAO_PACKAGE}`;
-
-  let didHide = false;
-  const onHide = () => { didHide = true; };
-  document.addEventListener('visibilitychange', onHide, { once: true });
-
-  window.location.href = uri;
-
-  setTimeout(() => {
-    document.removeEventListener('visibilitychange', onHide);
-    if (!didHide) {
-      // Kakao Map likely isn't installed on this device/browser — offer the install page.
-      showToast('카카오맵 앱이 없으면 설치 페이지로 이동합니다');
-      window.location.href = fallbackUrl;
-    }
-  }, 1500);
+  document.getElementById('startBtn').disabled = shown.length === 0 || patrolActive;
 }
 
 // ---------- patrol flow ----------
@@ -217,8 +120,11 @@ startBtn.addEventListener('click', () => {
     showToast('이 브라우저는 위치 정보를 지원하지 않습니다');
     return;
   }
-  points = points.map(p => ({ ...p, visited: false }));
-  renderAll();
+  // Fresh run: clear visited status for whatever is in scope today.
+  for (const p of filteredPoints()) delete visited[p.id];
+  saveVisited();
+  renderPointsList();
+  syncMarkers();
 
   navigator.geolocation.getCurrentPosition(
     (pos) => beginLeg(pos.coords.latitude, pos.coords.longitude),
@@ -230,7 +136,7 @@ startBtn.addEventListener('click', () => {
 stopBtn.addEventListener('click', stopPatrol);
 
 function beginLeg(fromLat, fromLng) {
-  const next = findNearestUnvisited(fromLat, fromLng);
+  const next = findNearest(filteredPoints().filter(p => !visited[p.id]), fromLat, fromLng);
   if (!next) { finishPatrol(); return; }
 
   currentTarget = next;
@@ -255,16 +161,16 @@ function startWatch() {
 function checkArrival(lat, lng) {
   if (!currentTarget) return;
   const d = distanceMeters(lat, lng, currentTarget.lat, currentTarget.lng);
-  if (d <= ARRIVAL_RADIUS_METERS) {
-    markArrived(lat, lng);
-  }
+  if (d <= ARRIVAL_RADIUS_METERS) markArrived(lat, lng);
 }
 
 function markArrived(lat, lng) {
-  points = points.map(p => p.id === currentTarget.id ? { ...p, visited: true } : p);
-  renderAll();
+  visited[currentTarget.id] = true;
+  saveVisited();
+  renderPointsList();
+  syncMarkers();
 
-  const next = findNearestUnvisited(lat, lng);
+  const next = findNearest(filteredPoints().filter(p => !visited[p.id]), lat, lng);
   if (!next) { finishPatrol(); return; }
 
   currentTarget = next;
@@ -277,8 +183,6 @@ arrivalGoBtn.addEventListener('click', () => {
   launchKakao(currentTarget);
 });
 
-// When the tab regains focus after visiting Kakao Map, watchPosition may have been
-// suspended by the browser — force one fresh location check right away.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && patrolActive && currentTarget) {
     navigator.geolocation.getCurrentPosition(
@@ -290,7 +194,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 function finishPatrol() {
-  showToast('모든 지점을 순찰했습니다');
+  showToast('선택한 종류의 지점을 모두 순찰했습니다');
   stopPatrol();
 }
 
@@ -301,17 +205,20 @@ function stopPatrol() {
   startBtn.classList.remove('hidden');
   stopBtn.classList.add('hidden');
   arrivalBanner.classList.add('hidden');
-}
-
-// ---------- toast ----------
-let toastTimer = null;
-function showToast(msg) {
-  const toast = document.getElementById('toast');
-  toast.textContent = msg;
-  toast.classList.remove('hidden');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toast.classList.add('hidden'), 2500);
+  renderPointsList();
 }
 
 // ---------- init ----------
-renderAll();
+async function init() {
+  try {
+    const res = await fetch(`points.json?v=${Date.now()}`);
+    allPoints = res.ok ? await res.json() : [];
+  } catch (e) {
+    allPoints = [];
+  }
+  renderTabs();
+  renderPointsList();
+  syncMarkers();
+}
+
+init();
