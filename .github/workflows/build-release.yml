@@ -1,0 +1,30 @@
+name: Build and release APK
+
+# Push a tag like "v1.0.0" to trigger this. It builds a debug-signed APK
+# (fine for internal sideload installs — no Play Store signing needed)
+# and attaches it to a GitHub Release so employees can download it directly.
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Create GitHub Release with APK
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/debug/app-debug.apk
