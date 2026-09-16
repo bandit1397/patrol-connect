@@ -146,3 +146,34 @@ button.secondary-btn { background: #eee; color: #333; flex: 1; }
   font-size: 12px;
   margin: 8px 0;
 }
+
+/* ---------- patrol run (officer page) ---------- */
+.current {
+  background: #E8F0FE;
+  border: 1px solid #1565C0;
+  border-radius: 8px;
+  padding: 8px;
+  margin-top: 8px;
+  font-size: 13px;
+}
+#currentText { margin-bottom: 8px; line-height: 1.5; }
+.btn-row button { flex: 1; }
+.btn-row button.ok { background: #2E7D32; color: #fff; }
+.btn-row button.warn { background: #F9A825; color: #fff; }
+
+ul.points li.target { background: #F3F8FF; }
+ul.points li .seq {
+  width: 22px; height: 22px; flex-shrink: 0;
+  border-radius: 50%;
+  color: #fff; font-size: 12px; font-weight: bold;
+  display: flex; align-items: center; justify-content: center;
+}
+ul.points li .seq.pending { background: #E53935; }
+ul.points li .seq.done { background: #2E7D32; }
+ul.points li .seq.skip { background: #9E9E9E; }
+ul.points li .dist { color: #888; font-size: 12px; flex-shrink: 0; }
+ul.points li button.goto { background: #e3ecfa; color: #1565C0; padding: 6px 10px; flex-shrink: 0; }
+
+.radius-row { margin-top: 8px; font-size: 13px; }
+.radius-row .small { color: #666; font-size: 12px; }
+#radiusSel { padding: 6px; border-radius: 6px; border: 1px solid #ccc; font-size: 13px; }

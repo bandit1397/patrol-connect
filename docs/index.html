@@ -19,11 +19,32 @@
 
 <div id="bottomPanel" class="panel bottom">
   <div class="row space-between">
-    <strong>선택된 순찰 지점</strong>
+    <strong>순찰 순서</strong>
     <span id="pointCount"></span>
   </div>
+
+  <div id="currentBox" class="current hidden">
+    <div id="currentText"></div>
+    <div class="row btn-row">
+      <button id="renavBtn">다시 안내</button>
+      <button id="arrivedBtn" class="ok">도착 처리</button>
+      <button id="skipBtn" class="warn">건너뛰기</button>
+    </div>
+  </div>
+
   <ul id="pointsList" class="points"></ul>
   <p id="noPoints" class="muted hidden">위에서 순찰할 종류를 먼저 선택하세요.</p>
+
+  <div class="row space-between radius-row">
+    <span class="small">도착 인정 반경</span>
+    <select id="radiusSel">
+      <option value="20">20 m</option>
+      <option value="30">30 m</option>
+      <option value="50">50 m</option>
+      <option value="100">100 m</option>
+    </select>
+  </div>
+
   <button id="startBtn" class="primary" disabled>순찰 시작</button>
   <button id="stopBtn" class="secondary hidden">순찰 종료</button>
 </div>
@@ -31,6 +52,7 @@
 <div id="arrivalBanner" class="banner hidden">
   <div id="arrivalText"></div>
   <button id="arrivalGoBtn" class="primary">탭하여 카카오맵으로 안내 시작</button>
+  <button id="arrivalCloseBtn" class="secondary-btn" style="margin-top:6px;width:100%">닫기</button>
 </div>
 
 <div id="toast" class="toast hidden"></div>

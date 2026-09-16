@@ -33,25 +33,34 @@ function escapeHtml(s) {
 
 const KAKAO_PACKAGE = 'net.daum.android.map';
 
-// Hands navigation to the Kakao Map app via its URL scheme (deep link — no API key).
-// Falls back to the Play Store listing if the app doesn't open within a short delay.
+function isAndroid() {
+  return /Android/i.test(navigator.userAgent);
+}
+
+// Hands navigation to Kakao Map (deep link — no API key).
+//
+// The patrol page MUST survive this call: everything about the run (which stop is
+// current, what's left) lives in this tab, so a navigation that unloads the page
+// kills the patrol. So:
+//   - Android: an intent:// URL. Chrome/Samsung Internet open the app if installed
+//     and only fall back to the store when it isn't — the page itself is never
+//     navigated away when the app is there.
+//   - Anything else (PC testing): open the Kakao Map web route in a new tab.
 function launchKakao(point) {
-  const uri = `kakaomap://route?ep=${point.lat},${point.lng}&by=CAR`;
-  const fallbackUrl = `https://play.google.com/store/apps/details?id=${KAKAO_PACKAGE}`;
+  const name = encodeURIComponent(point.label || '목적지');
+  const webUrl = `https://map.kakao.com/link/to/${name},${point.lat},${point.lng}`;
 
-  let didHide = false;
-  const onHide = () => { didHide = true; };
-  document.addEventListener('visibilitychange', onHide, { once: true });
+  if (!isAndroid()) {
+    window.open(webUrl, '_blank');
+    showToast('PC에서는 카카오맵 웹으로 엽니다 (실제 안내는 휴대폰에서)');
+    return;
+  }
 
-  window.location.href = uri;
-
-  setTimeout(() => {
-    document.removeEventListener('visibilitychange', onHide);
-    if (!didHide) {
-      showToast('카카오맵 앱이 없으면 설치 페이지로 이동합니다');
-      window.location.href = fallbackUrl;
-    }
-  }, 1500);
+  const fallback = encodeURIComponent(`https://play.google.com/store/apps/details?id=${KAKAO_PACKAGE}`);
+  const intentUrl =
+    `intent://route?ep=${point.lat},${point.lng}&by=CAR` +
+    `#Intent;scheme=kakaomap;package=${KAKAO_PACKAGE};S.browser_fallback_url=${fallback};end`;
+  window.location.href = intentUrl;
 }
 
 let _toastTimer = null;
