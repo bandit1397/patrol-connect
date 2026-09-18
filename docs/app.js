@@ -140,6 +140,22 @@ function planOrder(fromLat, fromLng) {
   return order;
 }
 
+// Picks the nearest candidate, but only when its lead over the next-closest one
+// beats the fix's own error margin. Points that sit closer together than the GPS
+// accuracy (e.g. bank branches 40-60m apart with a 50-150m cold-start fix) can't be
+// told apart reliably — guessing risks sending the officer to the wrong branch, so
+// this reports the pick as ambiguous instead and lets the caller ask the officer.
+function nearestWithConfidence(candidates, fromLat, fromLng, accuracy) {
+  if (candidates.length === 0) return { point: null, ambiguous: false };
+  const withDist = candidates
+    .map(p => ({ p, d: distanceMeters(fromLat, fromLng, p.lat, p.lng) }))
+    .sort((a, b) => a.d - b.d);
+  if (withDist.length === 1) return { point: withDist[0].p, ambiguous: false };
+  const margin = withDist[1].d - withDist[0].d;
+  const ambiguous = accuracy != null && margin < accuracy;
+  return { point: withDist[0].p, ambiguous };
+}
+
 // Display order: stops already handled (in the order they were handled), then the
 // freshly planned remainder.
 function rebuildOrder(planned) {
@@ -240,21 +256,23 @@ startBtn.addEventListener('click', () => {
   navigator.geolocation.getCurrentPosition(
     (pos) => {
       lastFix = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy };
-      beginSession(lastFix.lat, lastFix.lng);
+      beginSession(lastFix.lat, lastFix.lng, lastFix.accuracy);
     },
     () => showToast('위치 권한이 필요합니다'),
     { enableHighAccuracy: true, timeout: 15000 }
   );
 });
 
-function beginSession(fromLat, fromLng) {
+function beginSession(fromLat, fromLng, accuracy) {
   const order = planOrder(fromLat, fromLng);
   if (order.length === 0) { showToast('순찰할 지점이 없습니다'); return; }
+
+  const { ambiguous } = nearestWithConfidence(pendingPoints(), fromLat, fromLng, accuracy);
 
   session = {
     active: true,
     order,
-    targetId: order[0],
+    targetId: ambiguous ? null : order[0],
     categories: [...selectedCategories],
     startedAt: Date.now()
   };
@@ -265,6 +283,12 @@ function beginSession(fromLat, fromLng) {
   arrivalBanner.classList.add('hidden');
   renderAll();
   startWatch();
+
+  if (ambiguous) {
+    showToast(`가까운 지점이 여러 곳입니다 (오차 약 ${Math.round(accuracy)}m) · 목록에서 첫 지점을 선택해주세요`);
+    return;
+  }
+
   launchKakao(currentTarget());
   showToast(`1/${order.length} · ${currentTarget().label} 안내 시작`);
 }
@@ -298,7 +322,7 @@ function markArrived(lat, lng, userInitiated) {
   if (!target) return;
   visited[target.id] = true;
   saveVisited();
-  advanceFrom(lat, lng, `${target.label} 순찰 완료`, userInitiated);
+  advanceFrom(lat, lng, `${target.label} 순찰 완료`, userInitiated, lastFix ? lastFix.accuracy : null);
 }
 
 function skipCurrent(lat, lng) {
@@ -306,10 +330,10 @@ function skipCurrent(lat, lng) {
   if (!target) return;
   visited[target.id] = 'skip';
   saveVisited();
-  advanceFrom(lat, lng, `${target.label} 건너뜀`, true);
+  advanceFrom(lat, lng, `${target.label} 건너뜀`, true, lastFix ? lastFix.accuracy : null);
 }
 
-function advanceFrom(lat, lng, doneMsg, userInitiated) {
+function advanceFrom(lat, lng, doneMsg, userInitiated, accuracy) {
   const planned = planOrder(lat, lng);
   session.order = rebuildOrder(planned);
 
@@ -318,6 +342,21 @@ function advanceFrom(lat, lng, doneMsg, userInitiated) {
     saveSession();
     renderAll();
     finishPatrol();
+    return;
+  }
+
+  // Already-visited/skipped stops are excluded from pendingPoints(), so as the run
+  // progresses the candidate set shrinks — fewer nearby stops left means less room
+  // for the GPS fix to confuse which one is closest.
+  const { ambiguous } = nearestWithConfidence(pendingPoints(), lat, lng, accuracy);
+  if (ambiguous) {
+    session.targetId = null;
+    saveSession();
+    renderAll();
+    arrivalGoBtn.classList.add('hidden');
+    arrivalText.textContent = `${doneMsg} / 가까운 지점이 여러 곳이라 자동으로 정할 수 없습니다. 목록에서 다음 지점을 선택해주세요.`;
+    arrivalBanner.classList.remove('hidden');
+    showToast('가까운 지점이 여러 곳입니다 · 목록에서 선택해주세요');
     return;
   }
 
@@ -333,6 +372,7 @@ function advanceFrom(lat, lng, doneMsg, userInitiated) {
     showToast(`${doneMsg} → 다음: ${next.label}`);
     launchKakao(next);
   } else {
+    arrivalGoBtn.classList.remove('hidden');
     arrivalText.textContent = `${doneMsg} / 다음 지점: ${next.label}`;
     arrivalBanner.classList.remove('hidden');
   }
@@ -479,16 +519,24 @@ function resumeSession() {
   selectedCategories = new Set(session.categories || []);
   session.order = (session.order || []).filter(id => known.has(id));
 
-  if (!session.targetId || !known.has(session.targetId)) {
+  // A saved target pointing at a removed/stale point needs a fallback pick. A saved
+  // null target means the last GPS fix was too ambiguous to auto-pick (see
+  // nearestWithConfidence) — leave it null so the officer chooses from the list
+  // instead of silently guessing after the tab reloads.
+  if (session.targetId && !known.has(session.targetId)) {
     session.targetId = session.order.find(id => !visited[id]) || null;
   }
-  if (!session.targetId) { stopPatrol(); return; }
+
+  const hasPending = session.order.some(id => !visited[id]);
+  if (!hasPending) { stopPatrol(); return; }
 
   saveSession();
   startBtn.classList.add('hidden');
   stopBtn.classList.remove('hidden');
   startWatch();
-  showToast(`순찰을 이어서 진행합니다 · ${currentTarget().label}`);
+  showToast(session.targetId
+    ? `순찰을 이어서 진행합니다 · ${currentTarget().label}`
+    : '가까운 지점이 여러 곳입니다 · 목록에서 다음 지점을 선택해주세요');
 }
 
 async function init() {
