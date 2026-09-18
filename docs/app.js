@@ -163,6 +163,7 @@ function renderAll() {
 
 // ---------- patrol flow ----------
 const startBtn = document.getElementById('startBtn');
+const resetBtn = document.getElementById('resetBtn');
 const stopBtn = document.getElementById('stopBtn');
 const arrivalBanner = document.getElementById('arrivalBanner');
 const arrivalText = document.getElementById('arrivalText');
@@ -172,6 +173,15 @@ startBtn.addEventListener('click', () => {
   activateSession();
   renderAll();
   showToast('지도에서 순찰할 지점을 선택하세요');
+});
+
+// Mid-patrol reset: clear today's progress and start over from the first stop,
+// without having to finish (or skip) whatever's still pending first.
+resetBtn.addEventListener('click', () => {
+  if (!confirm('지금까지의 진행 상황을 지우고 처음부터 다시 시작할까요?')) return;
+  activateSession();
+  renderAll();
+  showToast('초기화되었습니다 · 지도에서 순찰할 지점을 선택하세요');
 });
 
 // Fresh run: clear today's progress and open an active session with no target yet —
@@ -189,6 +199,7 @@ function activateSession() {
   saveSession();
 
   startBtn.classList.add('hidden');
+  resetBtn.classList.remove('hidden');
   stopBtn.classList.remove('hidden');
   arrivalBanner.classList.add('hidden');
   if (navigator.geolocation) startWatch();
@@ -328,6 +339,7 @@ function stopPatrol() {
   localStorage.removeItem(SESSION_KEY);
   if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
   startBtn.classList.remove('hidden');
+  resetBtn.classList.add('hidden');
   stopBtn.classList.add('hidden');
   arrivalBanner.classList.add('hidden');
   renderAll();
@@ -364,6 +376,7 @@ function resumeSession() {
 
   saveSession();
   startBtn.classList.add('hidden');
+  resetBtn.classList.remove('hidden');
   stopBtn.classList.remove('hidden');
   startWatch();
   showToast(session.targetId
