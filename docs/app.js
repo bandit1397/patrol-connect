@@ -1,7 +1,10 @@
 // Officer-facing patrol navigation. Points are read-only here — they come from
 // points.json, which only the admin (admin.html) edits and commits. This page lets
-// the officer pick which categories to patrol, plans a nearest-first order, and
-// hands each leg to Kakao Map.
+// the officer pick which categories to patrol, then manually pick each stop — from
+// the list or by tapping its marker on the map — and hands that leg to Kakao Map.
+// There is no automatic "nearest stop" selection: GPS accuracy can't reliably tell
+// apart stops that sit closer together than its own error margin (e.g. bank
+// branches 40-60m apart), so the officer always chooses.
 //
 // The run itself lives in localStorage, not just in memory: handing off to Kakao Map
 // puts this tab in the background, and Android is free to discard and reload a
@@ -87,6 +90,8 @@ function syncMarkers() {
   for (const p of shown) {
     if (!markers[p.id]) {
       markers[p.id] = L.marker([p.lat, p.lng], { icon: markerIcon(p) }).addTo(map);
+      // Tapping a marker selects/navigates to it, same as the list's 여기로 button.
+      markers[p.id].on('click', () => manualSelect(p.id));
     } else {
       markers[p.id].setIcon(markerIcon(p));
     }
@@ -118,51 +123,10 @@ function renderTabs() {
 }
 
 // ---------- route order ----------
-// Greedy nearest-neighbour chain: from where you are, the closest unvisited stop;
-// from that stop, the closest of the rest; and so on. Same rule the Android app
-// uses, but computed for the whole remaining route at once so the officer can see
-// the order up front (1 → 2 → 3).
-function planOrder(fromLat, fromLng) {
-  const rest = pendingPoints();
-  const order = [];
-  let lat = fromLat, lng = fromLng;
-  while (rest.length) {
-    let bestIdx = 0;
-    let bestDist = distanceMeters(lat, lng, rest[0].lat, rest[0].lng);
-    for (let i = 1; i < rest.length; i++) {
-      const d = distanceMeters(lat, lng, rest[i].lat, rest[i].lng);
-      if (d < bestDist) { bestIdx = i; bestDist = d; }
-    }
-    const chosen = rest.splice(bestIdx, 1)[0];
-    order.push(chosen.id);
-    lat = chosen.lat; lng = chosen.lng;
-  }
-  return order;
-}
-
-// Picks the nearest candidate, but only when its lead over the next-closest one
-// beats the fix's own error margin. Points that sit closer together than the GPS
-// accuracy (e.g. bank branches 40-60m apart with a 50-150m cold-start fix) can't be
-// told apart reliably — guessing risks sending the officer to the wrong branch, so
-// this reports the pick as ambiguous instead and lets the caller ask the officer.
-function nearestWithConfidence(candidates, fromLat, fromLng, accuracy) {
-  if (candidates.length === 0) return { point: null, ambiguous: false };
-  const withDist = candidates
-    .map(p => ({ p, d: distanceMeters(fromLat, fromLng, p.lat, p.lng) }))
-    .sort((a, b) => a.d - b.d);
-  if (withDist.length === 1) return { point: withDist[0].p, ambiguous: false };
-  const margin = withDist[1].d - withDist[0].d;
-  const ambiguous = accuracy != null && margin < accuracy;
-  return { point: withDist[0].p, ambiguous };
-}
-
-// Display order: stops already handled (in the order they were handled), then the
-// freshly planned remainder.
-function rebuildOrder(planned) {
-  const handled = (session && session.order ? session.order : []).filter(id => visited[id]);
-  return handled.concat(planned);
-}
-
+// session.order only ever holds ids the officer has actually targeted, in the order
+// they were targeted (built up by setTarget). displayOrder() shows those first, then
+// whatever's left in the default (points.json) order — there's no distance-based
+// planning here on purpose; see the file header.
 function displayOrder() {
   const byId = new Map(filteredPoints().map(p => [p.id, p]));
   const out = [];
@@ -194,16 +158,16 @@ function renderPointsList() {
     const distText = lastFix
       ? `<span class="dist">${Math.round(distanceMeters(lastFix.lat, lastFix.lng, p.lat, p.lng))}m</span>`
       : '';
+    const btnLabel = isTarget ? '안내' : state === 'done' ? '완료' : state === 'skip' ? '건너뜀' : '여기로';
     li.innerHTML = `
       <span class="seq ${state}">${idx + 1}</span>
       <span class="label">${escapeHtml(p.label)}${isTarget ? ' <b>← 현재 목표</b>' : ''}</span>
       ${distText}
-      <button class="goto" data-id="${p.id}">${isTarget ? '안내' : '여기로'}</button>
+      <button class="goto" data-id="${p.id}">${btnLabel}</button>
     `;
     list.appendChild(li);
   });
 
-  // 수동 지정: 자동 전환이 안 되면 목록에서 직접 다음 지점을 고를 수 있다.
   list.querySelectorAll('button.goto').forEach(btn => {
     btn.addEventListener('click', () => manualSelect(btn.dataset.id));
   });
@@ -214,10 +178,19 @@ function renderPointsList() {
 function renderCurrentBox() {
   const box = document.getElementById('currentBox');
   const text = document.getElementById('currentText');
+  const btnRow = box.querySelector('.btn-row');
   const target = currentTarget();
-  box.classList.toggle('hidden', !target);
-  if (!target) return;
 
+  box.classList.toggle('hidden', !isActive());
+  if (!isActive()) return;
+
+  if (!target) {
+    btnRow.classList.add('hidden');
+    text.innerHTML = `목록 또는 지도에서 다음 지점을 선택하세요 · 남은 지점 ${pendingPoints().length}곳`;
+    return;
+  }
+
+  btnRow.classList.remove('hidden');
   let line = `현재 목표: <b>${escapeHtml(target.label)}</b>`;
   if (lastFix) {
     line += ` · 약 ${Math.round(distanceMeters(lastFix.lat, lastFix.lng, target.lat, target.lng))}m`;
@@ -238,45 +211,24 @@ const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
 const arrivalBanner = document.getElementById('arrivalBanner');
 const arrivalText = document.getElementById('arrivalText');
-const arrivalGoBtn = document.getElementById('arrivalGoBtn');
 
 startBtn.addEventListener('click', () => {
-  if (!navigator.geolocation) {
-    showToast('이 브라우저는 위치 정보를 지원하지 않습니다');
-    return;
-  }
   if (filteredPoints().length === 0) return;
-
-  // Fresh run: clear progress for whatever is in scope today.
-  for (const p of filteredPoints()) delete visited[p.id];
-  saveVisited();
+  activateSession();
   renderAll();
-
-  showToast('현재 위치를 확인하는 중...');
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      lastFix = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy };
-      beginSession(lastFix.lat, lastFix.lng, lastFix.accuracy);
-    },
-    () => showToast('위치 권한이 필요합니다'),
-    { enableHighAccuracy: true, timeout: 15000 }
-  );
+  showToast('목록 또는 지도에서 순찰할 지점을 선택하세요');
 });
 
-function beginSession(fromLat, fromLng, accuracy) {
-  const order = planOrder(fromLat, fromLng);
-  if (order.length === 0) { showToast('순찰할 지점이 없습니다'); return; }
-
-  // Always auto-pick the nearest guess so 완료/건너뛰기 always have a target to act
-  // on — a blocked target left the officer stuck with no way to progress. When the
-  // fix can't confidently tell close stops apart we still go with the best guess,
-  // just flag it so the officer knows to double-check (and can override from the list).
-  const { ambiguous } = nearestWithConfidence(pendingPoints(), fromLat, fromLng, accuracy);
+// Fresh run: clear today's progress and open an active session with no target yet —
+// the officer picks the first stop from the list or the map.
+function activateSession() {
+  for (const p of filteredPoints()) delete visited[p.id];
+  saveVisited();
 
   session = {
     active: true,
-    order,
-    targetId: order[0],
+    order: [],
+    targetId: null,
     categories: [...selectedCategories],
     startedAt: Date.now()
   };
@@ -285,12 +237,7 @@ function beginSession(fromLat, fromLng, accuracy) {
   startBtn.classList.add('hidden');
   stopBtn.classList.remove('hidden');
   arrivalBanner.classList.add('hidden');
-  renderAll();
-  startWatch();
-  launchKakao(currentTarget());
-  showToast(ambiguous
-    ? `1/${order.length} · ${currentTarget().label} 안내 시작 (가까운 지점이 여러 곳이라 다를 수 있어요, 목록에서 변경 가능)`
-    : `1/${order.length} · ${currentTarget().label} 안내 시작`);
+  if (navigator.geolocation) startWatch();
 }
 
 function startWatch() {
@@ -311,84 +258,50 @@ function checkArrival(lat, lng) {
   const target = currentTarget();
   if (!target) return;
   if (distanceMeters(lat, lng, target.lat, target.lng) <= arrivalRadius) {
-    markArrived(lat, lng, false);
+    markArrived(false);
   }
 }
 
-// Marks the current stop done and moves on to the next nearest one, recomputed from
-// where the officer actually is — the behaviour the Android app has.
-function markArrived(lat, lng, userInitiated) {
+// Marks the current stop done and clears the target — the officer picks the next
+// stop manually (list or map) rather than the app guessing the nearest one.
+function markArrived(userInitiated) {
   const target = currentTarget();
   if (!target) return;
   visited[target.id] = true;
   saveVisited();
-  advanceFrom(lat, lng, `${target.label} 순찰 완료`, userInitiated, lastFix ? lastFix.accuracy : null);
+  advanceFrom(`${target.label} 순찰 완료`, userInitiated);
 }
 
-function skipCurrent(lat, lng) {
+function skipCurrent() {
   const target = currentTarget();
   if (!target) return;
   visited[target.id] = 'skip';
   saveVisited();
-  advanceFrom(lat, lng, `${target.label} 건너뜀`, true, lastFix ? lastFix.accuracy : null);
+  advanceFrom(`${target.label} 건너뜀`, true);
 }
 
-function advanceFrom(lat, lng, doneMsg, userInitiated, accuracy) {
-  const planned = planOrder(lat, lng);
-  session.order = rebuildOrder(planned);
+function advanceFrom(doneMsg, userInitiated) {
+  session.targetId = null;
+  saveSession();
+  renderAll();
 
-  if (planned.length === 0) {
-    session.targetId = null;
-    saveSession();
-    renderAll();
+  if (pendingPoints().length === 0) {
     finishPatrol();
     return;
   }
 
-  // Already-visited/skipped stops are excluded from pendingPoints(), so as the run
-  // progresses the candidate set shrinks — fewer nearby stops left means less room
-  // for the GPS fix to confuse which one is closest. Still auto-pick the best guess
-  // even when ambiguous (see beginSession) — 완료/건너뛰기 need a target to act on.
-  const { ambiguous } = nearestWithConfidence(pendingPoints(), lat, lng, accuracy);
-  const noteMsg = ambiguous ? ' (가까운 지점이 여러 곳이라 다를 수 있어요)' : '';
-
-  session.targetId = planned[0];
-  saveSession();
-  renderAll();
-
-  const next = currentTarget();
-  // Auto-advance whenever we can: a foreground page may launch the app itself. When
-  // it is backgrounded (officer still inside Kakao Map) the browser swallows the
-  // launch, so park it in the banner and fire it on the next tap / return instead.
+  // A foreground page can show this right away. When it's backgrounded (officer
+  // still inside Kakao Map) a toast may go unseen, so leave a banner for when they
+  // come back instead.
   if (userInitiated || document.visibilityState === 'visible') {
-    showToast(`${doneMsg} → 다음: ${next.label}${noteMsg}`);
-    launchKakao(next);
+    showToast(`${doneMsg} · 다음 지점을 선택하세요`);
   } else {
-    arrivalText.textContent = `${doneMsg} / 다음 지점: ${next.label}${noteMsg}`;
+    arrivalText.textContent = `${doneMsg} · 목록 또는 지도에서 다음 지점을 선택하세요`;
     arrivalBanner.classList.remove('hidden');
   }
 }
 
-// ---------- manual controls (자동 전환이 안 될 때) ----------
-function withPosition(fn) {
-  if (lastFix) { fn(lastFix.lat, lastFix.lng); return; }
-  if (!navigator.geolocation) { showToast('위치 정보를 사용할 수 없습니다'); return; }
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      lastFix = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy };
-      fn(lastFix.lat, lastFix.lng);
-    },
-    () => {
-      // No fix — fall back to the target's own position so the manual buttons still
-      // work indoors or with location turned off.
-      const t = currentTarget();
-      if (t) fn(t.lat, t.lng);
-      else showToast('위치를 확인할 수 없습니다');
-    },
-    { enableHighAccuracy: true, timeout: 10000 }
-  );
-}
-
+// ---------- manual controls ----------
 document.getElementById('renavBtn').addEventListener('click', () => {
   const t = currentTarget();
   if (t) launchKakao(t);
@@ -396,33 +309,23 @@ document.getElementById('renavBtn').addEventListener('click', () => {
 
 document.getElementById('arrivedBtn').addEventListener('click', () => {
   if (!isActive()) return;
-  withPosition((lat, lng) => markArrived(lat, lng, true));
+  markArrived(true);
 });
 
 document.getElementById('skipBtn').addEventListener('click', () => {
   if (!isActive()) return;
-  withPosition((lat, lng) => skipCurrent(lat, lng));
+  skipCurrent();
 });
 
-// Picking a stop straight from the list: during a run it reorders the route by hand,
-// before one it starts the patrol at the stop the officer chose.
+// Picking a stop — from the list or by tapping its marker on the map: during a run
+// it switches the target by hand, before one it starts the patrol at that stop.
 function manualSelect(id) {
   const p = pointById(id);
   if (!p) return;
 
   if (!isActive()) {
-    if (!navigator.geolocation) { showToast('이 브라우저는 위치 정보를 지원하지 않습니다'); return; }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        lastFix = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy };
-        for (const q of filteredPoints()) delete visited[q.id];
-        saveVisited();
-        beginSession(lastFix.lat, lastFix.lng);
-        setTarget(id);
-      },
-      () => showToast('위치 권한이 필요합니다'),
-      { enableHighAccuracy: true, timeout: 15000 }
-    );
+    activateSession();
+    setTarget(id);
     return;
   }
 
@@ -444,11 +347,6 @@ function setTarget(id) {
   showToast(`${pointById(id).label}(으)로 안내합니다`);
 }
 
-arrivalGoBtn.addEventListener('click', () => {
-  arrivalBanner.classList.add('hidden');
-  const t = currentTarget();
-  if (t) launchKakao(t);
-});
 document.getElementById('arrivalCloseBtn').addEventListener('click', () => {
   arrivalBanner.classList.add('hidden');
 });
@@ -510,16 +408,20 @@ function resumeSession() {
   selectedCategories = new Set(session.categories || []);
   session.order = (session.order || []).filter(id => known.has(id));
 
-  if (!session.targetId || !known.has(session.targetId)) {
-    session.targetId = session.order.find(id => !visited[id]) || null;
+  // A stale target (removed point) just gets cleared — the officer re-picks
+  // manually rather than the app guessing a replacement.
+  if (session.targetId && !known.has(session.targetId)) {
+    session.targetId = null;
   }
-  if (!session.targetId) { stopPatrol(); return; }
+  if (pendingPoints().length === 0) { stopPatrol(); return; }
 
   saveSession();
   startBtn.classList.add('hidden');
   stopBtn.classList.remove('hidden');
   startWatch();
-  showToast(`순찰을 이어서 진행합니다 · ${currentTarget().label}`);
+  showToast(session.targetId
+    ? `순찰을 이어서 진행합니다 · ${currentTarget().label}`
+    : '순찰 진행 중 · 목록 또는 지도에서 다음 지점을 선택하세요');
 }
 
 async function init() {
