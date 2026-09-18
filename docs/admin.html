@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <title>순찰 커넥트 — 관리자 (지점 편집)</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<link rel="stylesheet" href="style.css" />
+<script>document.write('<link rel="stylesheet" href="style.css?v=' + Date.now() + '">');</script>
 </head>
 <body>
 
@@ -53,7 +53,11 @@
 <div id="toast" class="toast hidden"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="common.js"></script>
-<script src="admin.js"></script>
+<script>
+  // GitHub Pages caches these for a while; append a per-load timestamp so this
+  // always loads the latest code instead of a stale cached copy.
+  document.write('<script src="common.js?v=' + Date.now() + '"><' + '/script>');
+  document.write('<script src="admin.js?v=' + Date.now() + '"><' + '/script>');
+</script>
 </body>
 </html>
