@@ -1,10 +1,10 @@
 // Officer-facing patrol navigation. Points are read-only here — they come from
-// points.json, which only the admin (admin.html) edits and commits. This page lets
-// the officer pick which categories to patrol, then manually pick each stop — from
-// the list or by tapping its marker on the map — and hands that leg to Kakao Map.
-// There is no automatic "nearest stop" selection: GPS accuracy can't reliably tell
-// apart stops that sit closer together than its own error margin (e.g. bank
-// branches 40-60m apart), so the officer always chooses.
+// points.json, which only the admin (admin.html) edits and commits. The map is the
+// whole interface: the officer picks which categories to patrol, then taps stops
+// directly on the map one at a time, each tap handing that leg to Kakao Map. There
+// is no automatic "nearest stop" selection: GPS accuracy can't reliably tell apart
+// stops that sit closer together than its own error margin (e.g. bank branches
+// 40-60m apart), so the officer always chooses.
 //
 // The run itself lives in localStorage, not just in memory: handing off to Kakao Map
 // puts this tab in the background, and Android is free to discard and reload a
@@ -19,7 +19,7 @@ const RADIUS_KEY = 'patrol_radius_v1';
 let allPoints = [];
 let selectedCategories = new Set();
 let visited = loadJson(VISITED_KEY, {});   // id -> true (완료) | 'skip' (건너뜀)
-let session = loadJson(SESSION_KEY, null); // { active, order: [id], targetId, categories }
+let session = loadJson(SESSION_KEY, null); // { active, targetId, categories, startedAt }
 let arrivalRadius = Number(localStorage.getItem(RADIUS_KEY)) || DEFAULT_RADIUS_METERS;
 let watchId = null;
 let markers = {};
@@ -90,7 +90,7 @@ function syncMarkers() {
   for (const p of shown) {
     if (!markers[p.id]) {
       markers[p.id] = L.marker([p.lat, p.lng], { icon: markerIcon(p) }).addTo(map);
-      // Tapping a marker selects/navigates to it, same as the list's 여기로 button.
+      // Tapping a marker is the whole interaction: pick it, patrol it, tap the next.
       markers[p.id].on('click', () => manualSelect(p.id));
     } else {
       markers[p.id].setIcon(markerIcon(p));
@@ -122,56 +122,11 @@ function renderTabs() {
   }
 }
 
-// ---------- route order ----------
-// session.order only ever holds ids the officer has actually targeted, in the order
-// they were targeted (built up by setTarget). displayOrder() shows those first, then
-// whatever's left in the default (points.json) order — there's no distance-based
-// planning here on purpose; see the file header.
-function displayOrder() {
-  const byId = new Map(filteredPoints().map(p => [p.id, p]));
-  const out = [];
-  if (session && session.order) {
-    for (const id of session.order) {
-      if (byId.has(id)) { out.push(byId.get(id)); byId.delete(id); }
-    }
-  }
-  return out.concat([...byId.values()]);
-}
-
-// ---------- points list ----------
-function renderPointsList() {
-  const list = document.getElementById('pointsList');
-  const noPoints = document.getElementById('noPoints');
-  const count = document.getElementById('pointCount');
-  const shown = displayOrder();
-
-  list.innerHTML = '';
-  const doneCount = shown.filter(p => visited[p.id] === true).length;
-  count.textContent = shown.length ? `${doneCount}/${shown.length} 완료` : '';
-  noPoints.classList.toggle('hidden', shown.length > 0);
-
-  shown.forEach((p, idx) => {
-    const state = visited[p.id] === true ? 'done' : visited[p.id] === 'skip' ? 'skip' : 'pending';
-    const isTarget = !!(session && session.targetId === p.id);
-    const li = document.createElement('li');
-    if (isTarget) li.className = 'target';
-    const distText = lastFix
-      ? `<span class="dist">${Math.round(distanceMeters(lastFix.lat, lastFix.lng, p.lat, p.lng))}m</span>`
-      : '';
-    const btnLabel = isTarget ? '안내' : state === 'done' ? '완료' : state === 'skip' ? '건너뜀' : '여기로';
-    li.innerHTML = `
-      <span class="seq ${state}">${idx + 1}</span>
-      <span class="label">${escapeHtml(p.label)}${isTarget ? ' <b>← 현재 목표</b>' : ''}</span>
-      ${distText}
-      <button class="goto" data-id="${p.id}">${btnLabel}</button>
-    `;
-    list.appendChild(li);
-  });
-
-  list.querySelectorAll('button.goto').forEach(btn => {
-    btn.addEventListener('click', () => manualSelect(btn.dataset.id));
-  });
-
+// ---------- controls ----------
+// No list — the map itself is the interface. This just keeps the start button and
+// the "pick a category first" hint in sync with what's selected.
+function renderControls() {
+  document.getElementById('noPoints').classList.toggle('hidden', filteredPoints().length > 0);
   document.getElementById('startBtn').disabled = filteredPoints().length === 0 || isActive();
 }
 
@@ -186,7 +141,7 @@ function renderCurrentBox() {
 
   if (!target) {
     btnRow.classList.add('hidden');
-    text.innerHTML = `목록 또는 지도에서 다음 지점을 선택하세요 · 남은 지점 ${pendingPoints().length}곳`;
+    text.innerHTML = `지도에서 다음 지점을 선택하세요 · 남은 지점 ${pendingPoints().length}곳`;
     return;
   }
 
@@ -202,7 +157,7 @@ function renderCurrentBox() {
 function renderAll() {
   renderTabs();
   renderCurrentBox();
-  renderPointsList();
+  renderControls();
   syncMarkers();
 }
 
@@ -216,18 +171,17 @@ startBtn.addEventListener('click', () => {
   if (filteredPoints().length === 0) return;
   activateSession();
   renderAll();
-  showToast('목록 또는 지도에서 순찰할 지점을 선택하세요');
+  showToast('지도에서 순찰할 지점을 선택하세요');
 });
 
 // Fresh run: clear today's progress and open an active session with no target yet —
-// the officer picks the first stop from the list or the map.
+// the officer picks the first stop by tapping it on the map.
 function activateSession() {
   for (const p of filteredPoints()) delete visited[p.id];
   saveVisited();
 
   session = {
     active: true,
-    order: [],
     targetId: null,
     categories: [...selectedCategories],
     startedAt: Date.now()
@@ -246,7 +200,6 @@ function startWatch() {
     (pos) => {
       lastFix = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy };
       renderCurrentBox();
-      renderPointsList();
       checkArrival(lastFix.lat, lastFix.lng);
     },
     () => {},
@@ -262,8 +215,8 @@ function checkArrival(lat, lng) {
   }
 }
 
-// Marks the current stop done and clears the target — the officer picks the next
-// stop manually (list or map) rather than the app guessing the nearest one.
+// Marks the current stop done and clears the target — the officer taps the next
+// stop on the map rather than the app guessing the nearest one.
 function markArrived(userInitiated) {
   const target = currentTarget();
   if (!target) return;
@@ -296,7 +249,7 @@ function advanceFrom(doneMsg, userInitiated) {
   if (userInitiated || document.visibilityState === 'visible') {
     showToast(`${doneMsg} · 다음 지점을 선택하세요`);
   } else {
-    arrivalText.textContent = `${doneMsg} · 목록 또는 지도에서 다음 지점을 선택하세요`;
+    arrivalText.textContent = `${doneMsg} · 지도에서 다음 지점을 선택하세요`;
     arrivalBanner.classList.remove('hidden');
   }
 }
@@ -317,8 +270,8 @@ document.getElementById('skipBtn').addEventListener('click', () => {
   skipCurrent();
 });
 
-// Picking a stop — from the list or by tapping its marker on the map: during a run
-// it switches the target by hand, before one it starts the patrol at that stop.
+// Picking a stop by tapping its marker on the map: during a run it switches the
+// target by hand, before one it starts the patrol at that stop.
 function manualSelect(id) {
   const p = pointById(id);
   if (!p) return;
@@ -336,10 +289,6 @@ function manualSelect(id) {
 
 function setTarget(id) {
   session.targetId = id;
-  // Put the chosen stop at the head of the remaining route, keeping the rest as is.
-  const handled = session.order.filter(x => visited[x]);
-  const rest = session.order.filter(x => !visited[x] && x !== id);
-  session.order = handled.concat([id], rest);
   saveSession();
   arrivalBanner.classList.add('hidden');
   renderAll();
@@ -357,7 +306,6 @@ document.addEventListener('visibilitychange', () => {
     (pos) => {
       lastFix = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy };
       renderCurrentBox();
-      renderPointsList();
       checkArrival(lastFix.lat, lastFix.lng);
     },
     () => {},
@@ -406,7 +354,6 @@ function resumeSession() {
 
   const known = new Set(allPoints.map(p => p.id));
   selectedCategories = new Set(session.categories || []);
-  session.order = (session.order || []).filter(id => known.has(id));
 
   // A stale target (removed point) just gets cleared — the officer re-picks
   // manually rather than the app guessing a replacement.
@@ -421,7 +368,7 @@ function resumeSession() {
   startWatch();
   showToast(session.targetId
     ? `순찰을 이어서 진행합니다 · ${currentTarget().label}`
-    : '순찰 진행 중 · 목록 또는 지도에서 다음 지점을 선택하세요');
+    : '순찰 진행 중 · 지도에서 다음 지점을 선택하세요');
 }
 
 async function init() {
