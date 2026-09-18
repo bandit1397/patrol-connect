@@ -267,12 +267,16 @@ function beginSession(fromLat, fromLng, accuracy) {
   const order = planOrder(fromLat, fromLng);
   if (order.length === 0) { showToast('순찰할 지점이 없습니다'); return; }
 
+  // Always auto-pick the nearest guess so 완료/건너뛰기 always have a target to act
+  // on — a blocked target left the officer stuck with no way to progress. When the
+  // fix can't confidently tell close stops apart we still go with the best guess,
+  // just flag it so the officer knows to double-check (and can override from the list).
   const { ambiguous } = nearestWithConfidence(pendingPoints(), fromLat, fromLng, accuracy);
 
   session = {
     active: true,
     order,
-    targetId: ambiguous ? null : order[0],
+    targetId: order[0],
     categories: [...selectedCategories],
     startedAt: Date.now()
   };
@@ -283,14 +287,10 @@ function beginSession(fromLat, fromLng, accuracy) {
   arrivalBanner.classList.add('hidden');
   renderAll();
   startWatch();
-
-  if (ambiguous) {
-    showToast(`가까운 지점이 여러 곳입니다 (오차 약 ${Math.round(accuracy)}m) · 목록에서 첫 지점을 선택해주세요`);
-    return;
-  }
-
   launchKakao(currentTarget());
-  showToast(`1/${order.length} · ${currentTarget().label} 안내 시작`);
+  showToast(ambiguous
+    ? `1/${order.length} · ${currentTarget().label} 안내 시작 (가까운 지점이 여러 곳이라 다를 수 있어요, 목록에서 변경 가능)`
+    : `1/${order.length} · ${currentTarget().label} 안내 시작`);
 }
 
 function startWatch() {
@@ -347,18 +347,10 @@ function advanceFrom(lat, lng, doneMsg, userInitiated, accuracy) {
 
   // Already-visited/skipped stops are excluded from pendingPoints(), so as the run
   // progresses the candidate set shrinks — fewer nearby stops left means less room
-  // for the GPS fix to confuse which one is closest.
+  // for the GPS fix to confuse which one is closest. Still auto-pick the best guess
+  // even when ambiguous (see beginSession) — 완료/건너뛰기 need a target to act on.
   const { ambiguous } = nearestWithConfidence(pendingPoints(), lat, lng, accuracy);
-  if (ambiguous) {
-    session.targetId = null;
-    saveSession();
-    renderAll();
-    arrivalGoBtn.classList.add('hidden');
-    arrivalText.textContent = `${doneMsg} / 가까운 지점이 여러 곳이라 자동으로 정할 수 없습니다. 목록에서 다음 지점을 선택해주세요.`;
-    arrivalBanner.classList.remove('hidden');
-    showToast('가까운 지점이 여러 곳입니다 · 목록에서 선택해주세요');
-    return;
-  }
+  const noteMsg = ambiguous ? ' (가까운 지점이 여러 곳이라 다를 수 있어요)' : '';
 
   session.targetId = planned[0];
   saveSession();
@@ -369,11 +361,10 @@ function advanceFrom(lat, lng, doneMsg, userInitiated, accuracy) {
   // it is backgrounded (officer still inside Kakao Map) the browser swallows the
   // launch, so park it in the banner and fire it on the next tap / return instead.
   if (userInitiated || document.visibilityState === 'visible') {
-    showToast(`${doneMsg} → 다음: ${next.label}`);
+    showToast(`${doneMsg} → 다음: ${next.label}${noteMsg}`);
     launchKakao(next);
   } else {
-    arrivalGoBtn.classList.remove('hidden');
-    arrivalText.textContent = `${doneMsg} / 다음 지점: ${next.label}`;
+    arrivalText.textContent = `${doneMsg} / 다음 지점: ${next.label}${noteMsg}`;
     arrivalBanner.classList.remove('hidden');
   }
 }
@@ -519,24 +510,16 @@ function resumeSession() {
   selectedCategories = new Set(session.categories || []);
   session.order = (session.order || []).filter(id => known.has(id));
 
-  // A saved target pointing at a removed/stale point needs a fallback pick. A saved
-  // null target means the last GPS fix was too ambiguous to auto-pick (see
-  // nearestWithConfidence) — leave it null so the officer chooses from the list
-  // instead of silently guessing after the tab reloads.
-  if (session.targetId && !known.has(session.targetId)) {
+  if (!session.targetId || !known.has(session.targetId)) {
     session.targetId = session.order.find(id => !visited[id]) || null;
   }
-
-  const hasPending = session.order.some(id => !visited[id]);
-  if (!hasPending) { stopPatrol(); return; }
+  if (!session.targetId) { stopPatrol(); return; }
 
   saveSession();
   startBtn.classList.add('hidden');
   stopBtn.classList.remove('hidden');
   startWatch();
-  showToast(session.targetId
-    ? `순찰을 이어서 진행합니다 · ${currentTarget().label}`
-    : '가까운 지점이 여러 곳입니다 · 목록에서 다음 지점을 선택해주세요');
+  showToast(`순찰을 이어서 진행합니다 · ${currentTarget().label}`);
 }
 
 async function init() {
